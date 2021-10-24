@@ -223,6 +223,16 @@ linear_approximator_config = merge_config(dict(
 ), default_config)
 
 
+# Solve the TODOs and remove `pass`
+
+# Build the algorithm-specify config.
+linear_approximator_config = merge_config(dict(
+    parameter_std=0.01,
+    learning_rate=0.01,
+    n=3,
+), default_config)
+
+########### linear ############
 class LinearTrainer(AbstractTrainer):
     def __init__(self, config):
         config = merge_config(config, linear_approximator_config)
@@ -331,7 +341,7 @@ class LinearTrainer(AbstractTrainer):
         # of the MSE w.r.t. the output of the linear function.
         current_state = valid_states[0]
         current_q = self.compute_values(current_state)[:, None]
-        loss_grad = G - current_q
+        loss_grad = (G - current_q)
 
         # [TODO] compute the value of value_grad, denoting the gradient of
         # the output of the linear function w.r.t. the parameters.
@@ -352,6 +362,88 @@ class LinearTrainer(AbstractTrainer):
         # [TODO] apply the gradient to self.parameters
         self.parameters += self.learning_rate * gradient
 
+########### polynomial_feature #############
+
+linear_fc_config = merge_config(dict(
+    polynomial_order=1,
+), linear_approximator_config)
+
+
+def polynomial_feature(sequence, order=1):
+    """
+    Construct the order-n polynomial-basis feature of the state.
+    Refer to Chapter 9.5.1 of the textbook.
+    We expect to get a vector of length `(order+1)^k` as the output,
+    wherein `k` is the dimensions of the state.
+
+    For example:
+    When the state is [2, 3, 4] (so k=3),
+    the first order polynomial feature of the state is
+    [
+        1,
+        2,
+        3,
+        4,
+        2 * 3 = 6,
+        2 * 4 = 8,
+        3 * 4 = 12,
+        2 * 3 * 4 = 24
+    ].
+
+    We have `(1+1)^3=8` output dimensions.
+
+    Note: it is not necessary to follow the ascending order.
+    """
+    # [TODO] finish this function.
+    output = []
+    k = len(sequence)
+    if k > 1:
+        v = sequence[0]
+        seq = [v ** i for i in range(order + 1)]
+        remain_seqs = polynomial_feature(sequence[1:], order=order)
+        for s in seq:
+            output += [s * r for r in remain_seqs]
+    elif k == 1:
+        v = sequence[0]
+        return [v ** i for i in range(order + 1)]
+
+    return output
+
+
+assert sorted(polynomial_feature([2, 3, 4])) == [1, 2, 3, 4, 6, 8, 12, 24]
+assert len(polynomial_feature([2, 3, 4], 2)) == 27
+assert len(polynomial_feature([2, 3, 4], 3)) == 64
+
+
+class LinearTrainerWithFeatureConstruction(LinearTrainer):
+    """In this class, we will expand the dimension of the state.
+    This procedure is done at self.process_state function.
+    The modification of self.obs_dim and the shape of parameters
+    is also needed.
+    """
+
+    def __init__(self, config):
+        config = merge_config(config, linear_fc_config)
+        # Initialize the abstract class.
+        super().__init__(config)
+
+        self.polynomial_order = self.config["polynomial_order"]
+
+        # Expand the size of observation
+        self.obs_dim = (self.polynomial_order + 1) ** self.obs_dim
+
+        # Since we change self.obs_dim, reset the parameters.
+        self.initialize_parameters()
+
+    def process_state(self, state):
+        """Please finish the polynomial function."""
+        processed = polynomial_feature(state, self.polynomial_order)
+        processed = np.asarray(processed)
+        assert len(processed) == self.obs_dim, processed.shape
+        return processed
+
+
+######## MLP ###########
 mlp_trainer_config = merge_config(dict(
     parameter_std=0.01,
     learning_rate=0.01,
@@ -400,11 +492,13 @@ class MLPTrainer(LinearTrainer):
 
         # [TODO] compute the target value.
         # Hint: copy your codes in LinearTrainer.
-        valid_states = processed_states[-n - 1:]
+        valid_states = processed_states[-n-1:]
         valid_rewards = rewards[-n:]
 
-        q_target = sum([reward * self.gamma ** i for i, reward in enumerate(valid_rewards)])
-        G = np.ones((self.act_dim, 1)) * q_target
+        q = sum([reward * self.gamma ** i for i, reward in enumerate(valid_rewards)])
+        G = np.zeros((self.act_dim, 1))
+        action = actions[-n-1]
+        G[action,0] = q
 
         if tau + n < T:
             next_n_values = self.compute_values(valid_states[-1])
@@ -417,7 +511,7 @@ class MLPTrainer(LinearTrainer):
         # We call the first one loss_grad, and the latter one
         # value_grad. We consider the Mean Square Error between the target
         # value (G) and the predict value (Q(s_t, a_t)) to be the loss.
-        cur_state = processed_states[tau]
+        # current_state = processed_states[tau]
 
         loss_grad = np.zeros((self.act_dim, 1))  # [act_dim, 1]
         # [TODO] compute loss_grad
@@ -429,12 +523,7 @@ class MLPTrainer(LinearTrainer):
         output_gradient = np.matmul(np.matmul(self.hidden_parameters.T, current_state[:, None]), loss_grad.T)
 
         # [TODO] compute the gradient of hidden layer parameters
-        # Hint: using chain rule and derive the formulation
-        hidden_gradient = np.zeros_like(self.hidden_parameters)
-        for a in range(self.act_dim):
-            out_p = self.output_parameters[:,a]
-            mid_grad = np.matmul(current_state[..., None], out_p[None, ...])
-            hidden_gradient += current_q[a]*mid_grad
+        hidden_gradient = np.matmul(np.matmul(current_state[:,None], loss_grad.T), self.output_parameters.T)
 
         assert np.all(np.isfinite(output_gradient)), \
             "Invalid value occurs in output_gradient! {}".format(
@@ -458,8 +547,8 @@ class MLPTrainer(LinearTrainer):
         #  make its norm equal to clip_norm.
         if self.config["clip_gradient"]:
             clip_norm = self.config["clip_norm"]
-            output_gradient = output_gradient * clip_norm / max(np.max(abs(output_gradient)), clip_norm)
-            hidden_gradient = hidden_gradient * clip_norm / max(np.max(abs(hidden_gradient)), clip_norm)
+            output_gradient = output_gradient * clip_norm / max(np.linalg.norm(output_gradient), clip_norm)
+            hidden_gradient = hidden_gradient * clip_norm / max(np.linalg.norm(hidden_gradient), clip_norm)
 
         # [TODO] update the parameters
         # Hint: Remember to check the sign when applying the gradient
