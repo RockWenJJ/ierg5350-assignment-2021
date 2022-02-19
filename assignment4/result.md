@@ -11,9 +11,7 @@
 
 ### A2C in CartPole
 
-(5 points)
-
-[TODO]
+![cartpole_a2c](./results/cartpole_a2c.png)
 
 
 
@@ -21,9 +19,7 @@
 
 (5 points)
 
-[TODO]
-
-
+![](./results/metaeasy_a2c.png)
 
 
 ## Learning curves of PPO
@@ -36,7 +32,7 @@ We require at least 10M steps to train PPO.
 
 (5 points)
 
-[TODO]
+![](./results/cartpole_ppo.png)
 
 
 
@@ -44,17 +40,19 @@ We require at least 10M steps to train PPO.
 
 (5 points)
 
-[TODO]
+![](./results/metaeasy_ppo_r.png)
 
 
+
+![](./results/metaeasy_ppo_s.png)
 
 ### PPO in MetaDrive Hard
 
 (10 points)
 
-[TODO]
+![](results/metahard_ppo_r.png)
 
-
+![](results/metahard_ppo_s.png)
 
 
 ## Learning curves of TD3
@@ -66,16 +64,18 @@ We require at least 1M steps to train TD3.
 
 (10 points)
 
-[TODO]
+![](./results/metaeasy_td3_r.png)
 
-
+![](./results/metaeasy_td3_s.png)
 
 
 ### TD3 in MetaDrive Hard
 
 (10 points)
 
-[TODO]
+![](./results/metahard_td3_r.png)
+
+![](./results/metahard_td3_s.png)
 
 
 
@@ -101,14 +101,14 @@ Sicne we don't run adequate repeated experiments, the curves might be chaotic an
 
 (40 points)
 
-[TODO]
+![](./results/ppo_generalized.png)
 
 
 ### TD3 curves
 
 (20 points)
 
-[TODO]
+![](./results/td3_generalized.png)
 
 
 
@@ -136,15 +136,21 @@ In this section, you are free to write down your ideas and discussion. Reasonabl
 
 ### Why do some experiments fail?
 
+In training PPO models, when the mini_batch_size is small, the learning process is unstable and hard to generalize. When the mini_batch_size is 256, the learning curve is shown as below:
 
+ ![](./results/metahard_ppo_s_256.png)
 
+However, when I set the mini_batch_size to 1024, the learning curve becomes much stable and ascends much better:
 
+![](./results/metahard_ppo_s.png)
+
+ 
 
 
 
 ### Anything else?
 
-
+After training in `MetaDrive-100Env`, both `PPO-agent` and `TD3-agent`  have slight higher success rate in the testing environments than their training environments. One possible  explanation is that the testing iteration number is not large enough and therefore the testing scenes are just a subset of the 100 training environments. 
 
 
 

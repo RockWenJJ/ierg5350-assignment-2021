@@ -148,6 +148,7 @@ def train(args):
     total_timer = Timer()
     progress = []
     evaluate_stat = {}
+    success_rate_best = 0.0
 
     # Start training
     print("Start training!")
@@ -164,10 +165,8 @@ def train(args):
                 #   2. trainer.rollouts is a storage containing all data
                 #   3. Pass current observations to compute_action
                 #   4. Since we are using stacked environments, please pay attention to the shape of each type of data
-                values = None
-                actions = None
-                action_log_prob = None
-                pass
+                with torch.no_grad():
+                    values, actions, action_log_prob = trainer.compute_action(trainer.rollouts.observations[index])
 
                 # actions is a torch tensor, so we need to turn it into numpy array.
                 cpu_actions = actions.cpu().numpy()
@@ -231,10 +230,23 @@ def train(args):
             )
 
             progress.append(stats)
-            pretty_print({
-                "===== {} Training Iteration {} =====".format(
-                    algo, iteration): stats
-            })
+            # pretty_print({
+            #     "===== {} Training Iteration {} =====".format(
+            #         algo, iteration): stats
+            # })
+            success_rate = stats["success_rate"]["success_rate_mean"]
+            print("Steps: {}， Episode_reward_mean: {}， Success Rate: {}".format(stats['iteration'],
+                                                                                stats["training_episode_reward"]["episode_reward_mean"],
+                                                                                success_rate))
+            progress_path = save_progress(log_dir, progress)
+            if success_rate > success_rate_best:
+                success_rate_best = success_rate
+                trainer_path = trainer.save_w(log_dir, "best".format(iteration))
+                print("Saved best trainer state at <{}>.".format(
+                    trainer_path))
+                if success_rate_best > 0.99:
+                    print("Early Stop!")
+                    break
 
         if iteration % config.save_freq == 0:
             trainer_path = trainer.save_w(log_dir, "iter{}".format(iteration))

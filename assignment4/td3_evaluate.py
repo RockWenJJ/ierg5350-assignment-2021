@@ -7,6 +7,7 @@ import os
 import os.path as osp
 import sys
 from collections import deque
+from pprint import pprint
 
 import gym
 import numpy as np
@@ -19,8 +20,8 @@ sys.path.append(current_dir)
 sys.path.append(osp.dirname(current_dir))
 # print(current_dir)
 
-from envs import make_envs
-from utils import summary, save_progress
+from core.envs import make_envs
+from core.utils import summary, save_progress
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -171,7 +172,6 @@ class TD3Trainer:
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
-        print("Critic Loss {}".format(critic_loss.item()))
 
         # Delayed policy updates
         if self.total_it % self.policy_freq == 0:
@@ -210,24 +210,37 @@ class TD3Trainer:
 
 # Runs policy for X episodes and returns average reward
 # A fixed seed is used for the eval environment
-def eval_policy(policy, env_name, seed, eval_episodes=10):
-    eval_env = gym.make(env_name)
+def eval_policy(policy,eval_env, seed, eval_episodes=10):
     eval_env.seed(seed + 100)
 
     avg_reward = 0.
-    for _ in range(eval_episodes):
+    reward_recorder = deque(maxlen=eval_episodes)
+    success_recorder = deque(maxlen=eval_episodes)
+
+    for i in range(eval_episodes):
         state, done = eval_env.reset(), False
+        ep_reward = 0
         while not done:
             action = policy.select_action(np.array(state))
-            state, reward, done, _ = eval_env.step(action)
-            avg_reward += reward
+            state, reward, done, info = eval_env.step(action)
+            ep_reward += reward
+            eval_env.render()
+            if done:
+                success = info["arrive_dest"]
+                success_recorder.append(float(success))
+                reward_recorder.append(float(ep_reward))
+                print("Episode {}, reward: {}, success rate: {}".format(i + 1, ep_reward,
+                                                                        np.mean(success_recorder)))
 
-    avg_reward /= eval_episodes
+    eval_env.close()
+    stats = dict(
+        training_episode_reward=summary(reward_recorder, "episode_reward"),
+        success_rate=summary(success_recorder, "success_rate"),
+        env_name=eval_env,
+        log_dir=log_dir
+    )
 
-    print("---------------------------------------")
-    print(f"Evaluation over {eval_episodes} episodes: {avg_reward:.3f}")
-    print("---------------------------------------")
-    return avg_reward
+    return stats
 
 
 if __name__ == "__main__":
@@ -273,13 +286,16 @@ if __name__ == "__main__":
     progress=[]
     total_steps = 0
 
-    environments = make_envs(
-        env_id=args.env_id,
-        log_dir=log_dir,
-        num_envs=1,
-        asynchronous=False,
-    )
-    env = environments.envs[0]
+    # environments = make_envs(
+    #     env_id=args.env_id,
+    #     log_dir=log_dir,
+    #     num_envs=1,
+    #     asynchronous=False,
+    # )
+    # env = environments.envs[0]
+    from core.utils import register_metadrive
+    register_metadrive()
+    env = gym.make(args.env_id, config={'use_render': True})
 
     # Set seeds
     env.seed(args.seed)
@@ -306,88 +322,13 @@ if __name__ == "__main__":
     kwargs["lr"] = args.lr
     policy = TD3Trainer(**kwargs)
     if args.load_dir:
-        policy.load(f"{args.load_dir}/default") # to accelerate training
+        policy.load(f"{args.load_dir}/best") # to accelerate training
 
     discrete = False
     max_size = 1e-6
     replay_buffer = ReplayBuffer(state_dim, action_dim)
 
-    state, done = env.reset(), False
-    episode_reward = 0
-    episode_timesteps = 0
-    episode_num = 0
-    success_rate_best = 0.0
-
-    for t in range(int(args.max_timesteps)):
-
-        episode_timesteps += 1
-
-        # Select action randomly or according to policy
-        if t < args.start_timesteps:
-            action = env.action_space.sample()
-        else:
-            action = (
-                    policy.select_action(np.array(state))
-                    + np.random.normal(0, max_action * args.expl_noise, size=action_dim)
-            ).clip(-max_action, max_action)
-
-        # Perform action
-        next_state, reward, done, info = env.step(action)
-        done_bool = float(done)  # if episode_timesteps < env._max_episode_steps else 0
-
-        if args.load_model:
-            # Modify this to load proper models!
-            policy.load(f"{log_dir}/models/default")
-
-        # Store data in replay buffer
-        replay_buffer.add(state, action, next_state, reward, done_bool)
-
-        state = next_state
-        episode_reward += reward
-
-        # Train agent after collecting sufficient data
-        if t >= args.start_timesteps:
-            policy.train(replay_buffer, args.batch_size)
-
-        if done:
-            # +1 to account for 0 indexing. +0 on ep_timesteps since it will increment +1 even if done=True
-            # record stats
-            reward_recorder.append(episode_reward)
-            if "arrive_dest" in info:
-                success_recorder.append(info["arrive_dest"])
-            # print(
-            #     f"Total T: {t + 1} Episode Num: {episode_num + 1} Episode T: {episode_timesteps} Reward: {episode_reward:.3f}")
-            # Reset environment
-            state, done = env.reset(), False
-            episode_reward = 0
-            episode_timesteps = 0
-            episode_num += 1
-        total_steps = (t+1)
-
-        if (t + 1) % args.log_freq == 0:
-            stats = dict(
-                training_episode_reward=summary(reward_recorder, "episode_reward"),
-                success_rate=summary(success_recorder, "success_rate"),
-                total_steps=total_steps
-            )
-            print("Total Steps: {}, Reward Mean: {}, Success Rate: {}".format(stats['total_steps'],
-                                                                              stats["training_episode_reward"]["episode_reward_mean"],
-                                                                              stats["success_rate"]["success_rate_mean"]))
-            progress.append(stats)
-            save_progress(log_dir, progress)
-            success_rate = stats["success_rate"]["success_rate_mean"]
-            # if success_rate >= success_rate_best:
-            #     print("Save best model at {}".format(t+1))
-            #     success_rate_best = success_rate
-            #     policy.save(f"{log_dir}/models/best")
-            #     if success_rate_best > 0.97:
-            #         print("Early Stop!")
-            #         break
-
-        if (t + 1) % args.save_freq == 0:
-            policy.save(f"{log_dir}/models/default")
-
-    policy.save(f"{log_dir}/models/final")
-
-
-
+    episode_num = 101
+    seed = 0
+    stats = eval_policy(policy, env, seed, eval_episodes=episode_num)
+    pprint(stats)

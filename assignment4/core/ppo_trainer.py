@@ -19,7 +19,7 @@ import torch.optim as optim
 current_dir = osp.join(osp.abspath(osp.dirname(__file__)))
 sys.path.append(current_dir)
 sys.path.append(osp.dirname(current_dir))
-print(current_dir)
+# print(current_dir)
 
 from base_trainer import BaseTrainer
 from buffer import PPORolloutStorage
@@ -33,7 +33,7 @@ class PPOConfig:
         # Common
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() else "cpu")
-        self.save_freq = 10
+        self.save_freq = 20
         self.log_freq = 1
         self.num_envs = 1
 
@@ -46,7 +46,7 @@ class PPOConfig:
         self.grad_norm_max = 10.0
         self.entropy_loss_weight = 0.0
         self.ppo_epoch = 10
-        self.mini_batch_size = 256
+        self.mini_batch_size = 1024
         self.ppo_clip_param = 0.2
         self.USE_GAE = True
         self.gae_lambda = 0.95
@@ -93,18 +93,21 @@ class PPOTrainer(BaseTrainer):
         assert dist_entropy.requires_grad
 
         # [TODO] Implement policy loss
-        policy_loss = None
-        ratio = None  # The importance sampling factor, the ratio of new policy prob over old policy prob
-        pass
+        ratio = torch.exp(action_log_probs - old_action_log_probs_batch)
+        surr1 = ratio * adv_targ
+        surr2 = torch.clamp(ratio, 1.0 - self.clip_param, 1.0 + self.clip_param) * adv_targ
+        policy_loss = -torch.min(surr1, surr2).mean()
+        # ratio = None  # The importance sampling factor, the ratio of new policy prob over old policy prob
 
 
         # [TODO] Implement value loss
-        value_loss = None
-        pass
+        value_loss = F.mse_loss(return_batch, values)
 
         # This is the total loss
         loss = policy_loss + self.config.value_loss_weight * value_loss - self.config.entropy_loss_weight * dist_entropy
         loss = loss.mean()
+        policy_loss_mean = policy_loss.mean()
+        value_loss_mean = value_loss.mean()
 
         return loss, policy_loss_mean, value_loss_mean, torch.mean(dist_entropy), torch.mean(ratio)
 
@@ -112,7 +115,7 @@ class PPOTrainer(BaseTrainer):
         # Get the normalized advantages
         advantages = rollout.returns[:-1] - rollout.value_preds[:-1]
         adv_mean = advantages.mean().item()
-        advantages = (advantages - advantages.mean()) / max(advantages.std(), 1e-4)
+        advantages = (advantages - advantages.mean().item()) / max(advantages.std().item(), 1e-4)
 
         value_loss_epoch = []
         policy_loss_epoch = []
